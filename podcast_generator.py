@@ -1076,7 +1076,7 @@ async def generate_audio(turns, target_dir=None):
         success = False
         word_boundaries = []
         engine = "edge"
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 configure_edge_tts()
                 communicate = edge_tts.Communicate(spoken_text, voice, boundary="WordBoundary")
@@ -1095,16 +1095,15 @@ async def generate_audio(turns, target_dir=None):
                 if Path(filename).exists() and Path(filename).stat().st_size > 100:
                     success = True
                     break
+                print(f"  Audio {i} attempt {attempt+1}/5: no audio received")
             except Exception as e:
-                print(f"  Audio {i} attempt {attempt+1}/3 failed: {e}")
-                if attempt == 0:
-                    print(f"  Audio {i} waiting 15s before retry...")
-                    await asyncio.sleep(15.0)
-                elif attempt == 1:
-                    print(f"  Audio {i} waiting 45s before final retry...")
-                    await asyncio.sleep(45.0)
+                print(f"  Audio {i} attempt {attempt+1}/5 failed: {e}")
+            if attempt < 4:
+                _wait = [15.0, 45.0, 90.0, 180.0][attempt]
+                print(f"  Audio {i} waiting {_wait:g}s before retry...")
+                await asyncio.sleep(_wait)
         if not success:
-            raise RuntimeError(f"Edge TTS failed for turn {i} after 3 attempts; no fallback allowed")
+            raise RuntimeError(f"Edge TTS failed for turn {i} after 5 attempts; no fallback allowed")
         try:
             r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1", str(filename)], capture_output=True, text=True)
