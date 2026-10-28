@@ -877,7 +877,7 @@ Return EXACTLY {batch_size} turns as a JSON array (no markdown):
             resp = requests.post("https://gen.pollinations.ai/v1/chat/completions", json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": "You write natural A2-level Vietnamese podcast scripts with VERY clear punctuation. Every sentence must have at least 2 commas for natural TTS pauses. Minh and Linh strictly alternate. Highlight 1 key target word per turn in double asterisks. No filler sounds. CRITICAL: the target field must contain ONLY Vietnamese (Latin letters). The translit field must repeat the target text exactly. English belongs only in the english field. Output single compact JSON array without unescaped newlines inside strings."},
+                    {"role": "system", "content": "You write natural A2-level Vietnamese podcast scripts with VERY clear punctuation. Every sentence must have at least 2 commas for natural TTS pauses. Minh and Linh strictly alternate. Highlight 1 key target word per turn in double asterisks. No filler sounds. CRITICAL: the target field must contain ONLY Vietnamese (Latin letters). Each host addresses the OTHER host by name: Linh greets Minh and Minh greets Linh. No host ever addresses themselves by their own name; the only exception is introducing yourself. The translit field must repeat the target text exactly. English belongs only in the english field. Output single compact JSON array without unescaped newlines inside strings."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.8
@@ -954,7 +954,7 @@ def _fallback_script(topic_tr, topic_en, target=150):
             ('Host1', 'Vâng, tôi **thích** lắm vì tôi có thể đi bộ.', 'Yes, I like it because I can walk.'),
             ('Host2', 'Tuy nhiên tối nay có thể **mưa**.', 'However, tonight it may rain.'),
             ('Host1', 'Đúng rồi, tôi sẽ mang **ô** đi làm.', 'That’s right, I will bring an umbrella to work.'),
-            ('Host2', 'Linh hỏi thêm: bạn uống **nước** mỗi ngày không?', 'Linh asks more: do you drink water every day?'),
+            ('Host2', 'Mình hỏi thêm: bạn uống **nước** mỗi ngày không?', 'I ask more: do you drink water every day?'),
             ('Host1', 'Tôi uống **nước** buổi sáng và buổi tối.', 'I drink water in the morning and in the evening.'),
             ('Host2', 'Thật tốt! Bạn có ăn **trái cây** không?', 'That’s good! Do you eat fruit?'),
             ('Host1', 'Tôi ăn **chuối** và táo mỗi tuần.', 'I eat bananas and apples every week.'),

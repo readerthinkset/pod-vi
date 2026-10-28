@@ -71,6 +71,24 @@ if not toks:
 elif "".join(toks).replace(" ", "") != (trg or clean).replace("**", "").replace(" ", ""):
     FAILURES.append("karaoke: rebuild mismatch %r" % toks)
 
+# 9. Fallback turns address the OTHER host, never self (except self-introduction).
+import json as _json
+import re as _re
+_fb = _json.loads((Path(__file__).resolve().parent.parent / "fleet_cache.json").read_text(encoding="utf-8"))["Vietnamese"]["fallback"]
+_addr_bad = []
+for _i, _t in enumerate(_fb):
+    _en = _t.get("english", "") or ""
+    _spk = _t.get("speaker", "")
+    _own = "Linh" if _spk == "Host2" else "Minh"
+    _other = "Minh" if _spk == "Host2" else "Linh"
+    _el = _en.lower()
+    if _re.search(r"%s" % _own.lower(), _el) and not _re.search(r"(i'm|i am|this is|my name is) %s" % _own.lower(), _el):
+        _addr_bad.append((_i, _en))
+    if _i < 2 and _other.lower() not in _el:
+        _addr_bad.append((_i, "intro-missing-other: " + _en))
+if _addr_bad:
+    FAILURES.append('addressing: %r' % (_addr_bad,))
+
 if FAILURES:
     print("FAIL %d" % len(FAILURES))
     for f in FAILURES:
