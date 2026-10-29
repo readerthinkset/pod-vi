@@ -433,23 +433,26 @@ def _script_tokens(text, font, draw):
     parts = re.split('(\\*\\*.*?\\*\\*)', text)
     tokens = []
     for part in parts:
+        is_hl = False
         if part.startswith('**') and part.endswith('**') and len(part) > 4:
-            core = part[2:-2]
-            if not core:
+            is_hl = True
+            part = part[2:-2]
+            if not part:
                 continue
-            bb = draw.textbbox((0, 0), core, font=font)
-            tokens.append((core, True, bb[2] - bb[0]))
-            continue
         if not part:
             continue
-        for w in part.split(' '):
+        # Keep every space exactly (incl. around ** runs): split while
+        # retaining separators so no gap is ever dropped or shifted.
+        for w in re.split('( +)', part):
             if not w:
                 continue
-            bb = draw.textbbox((0, 0), w, font=font)
-            tokens.append((w, False, bb[2] - bb[0]))
-            tokens.append((' ', False, draw.textbbox((0, 0), ' ', font=font)[2]))
-        if tokens and tokens[-1][0] == ' ':
-            tokens.pop()
+            if w.strip() == '':
+                _sp = draw.textbbox((0, 0), ' ', font=font)[2]
+                for _ch in w:
+                    tokens.append((' ', False, _sp))
+            else:
+                bb = draw.textbbox((0, 0), w, font=font)
+                tokens.append((w, is_hl, bb[2] - bb[0]))
     return tokens
 
 
@@ -1115,6 +1118,23 @@ async def generate_audio(turns, target_dir=None):
             print(f"  Audio {i} [{turn['speaker']}/{voice}] via {engine}: {duration:.1f}s, {len(word_boundaries)} bounds")
     return audio_files
 
+_KARAOKE_SEP = " "
+# Joiner that rebuilds the exact original spacing from karaoke tokens.
+# Word languages use " "; char/cluster languages use "".
+
+
+def _karaoke_marked(tokens, k):
+    """Rebuild the karaoke line with token k highlighted, preserving spacing.
+
+    The highlighted token keeps its exact position, so the wrapped subtitle
+    lines are identical at every step: only the color changes, the layout
+    never shifts. Pure-space tokens are never wrapped in markers.
+    """
+    return _KARAOKE_SEP.join(
+        f"**{x}**" if (j == k and x.strip() != "") else x
+        for j, x in enumerate(tokens))
+
+
 def karaoke_tokens_for_text(target_text):
     """Split a line into per-word highlight tokens."""
     clean = re.sub('\\*\\*(.*?)\\*\\*', '\\1', target_text or "").strip()
@@ -1162,7 +1182,7 @@ def write_karaoke_files(turns, audio_files, out_dir):
             cursor += d
         timings.append({"speaker": turn["speaker"], "tokens": cells})
         if tokens:
-            k_line = "".join("{\\k%d}%s" % (max(1, int(round(d * 100))), tok) for tok, d in zip(tokens, steps))
+            k_line = _KARAOKE_SEP.join("{\\k%d}%s" % (max(1, int(round(d * 100))), tok) for tok, d in zip(tokens, steps))
             events.append(f"Dialogue: 0,{_ass_timestamp(t)},{_ass_timestamp(t + dur)},VI,,0,0,0,,{k_line}")
         romaji = sanitize_translit(turn.get("translit", ""))
         if romaji:
@@ -1195,7 +1215,7 @@ def render_karaoke_preview(turns, audio_files, out_dir, max_turns=3):
         steps = karaoke_step_durations(tokens, audio["duration"], audio.get("word_boundaries", []))
         parts = []
         for k in range(len(tokens)):
-            marked = "".join(f"**{x}**" if j == k else x for j, x in enumerate(tokens))
+            marked = _karaoke_marked(tokens, k)
             step_turn = dict(turn)
             step_turn["target"] = marked
             img = prev_dir / f"t{ti:02d}_w{k:03d}.png"
@@ -1238,7 +1258,7 @@ def _render_turn_segment(turn, audio, video_dir, i):
     else:
         parts = []
         for k in range(len(tokens)):
-            marked = "".join(f"**{x}**" if j == k else x for j, x in enumerate(tokens))
+            marked = _karaoke_marked(tokens, k)
             step_turn = dict(turn)
             step_turn["target"] = marked
             img = video_dir / f"f_{i:04d}_w{k:03d}.png"

@@ -89,6 +89,40 @@ for _i, _t in enumerate(_fb):
 if _addr_bad:
     FAILURES.append('addressing: %r' % (_addr_bad,))
 
+# 10. Karaoke marked lines preserve spacing exactly at every highlight step.
+_mtoks = pg.karaoke_tokens_for_text(trg or clean)
+_mplain = (trg or clean).replace("**", "").strip()
+if not _mtoks:
+    FAILURES.append("karaoke-marked: no tokens")
+else:
+    for _k in range(len(_mtoks)):
+        _m = pg._karaoke_marked(_mtoks, _k)
+        if _m.replace("**", "") != _mplain:
+            FAILURES.append("karaoke-marked: spacing lost at step %d: %r" % (_k, _m))
+            break
+
+# 11. Tokenizer keeps spaces around highlight runs (exact round-trip).
+class _StubDraw:
+    def textbbox(self, xy, text, font=None):
+        return (0, 0, 10 * len(text), 10)
+if _mtoks:
+    _mid = pg._karaoke_marked(_mtoks, len(_mtoks) // 2)
+    _st = pg._script_tokens(_mid, None, _StubDraw())
+    _rt = "".join(_t[0] for _t in _st)
+    if _rt != _mid.replace("**", ""):
+        FAILURES.append("tokenizer-space: %r became %r" % (_mid, _rt))
+
+# 12. Wrapped subtitle lines never shift between highlight steps.
+if _mtoks:
+    _wraps = []
+    for _k in range(len(_mtoks)):
+        _mk = pg._karaoke_marked(_mtoks, _k)
+        _tk = pg._script_tokens(_mk, None, _StubDraw())
+        _w = pg._wrap_tokens(_tk, 150)
+        _wraps.append([[_x[0] for _x in _line] for _line, _wd in _w])
+    if any(_w != _wraps[0] for _w in _wraps):
+        FAILURES.append("wrap-stable: lines shift between steps: %r" % (_wraps,))
+
 if FAILURES:
     print("FAIL %d" % len(FAILURES))
     for f in FAILURES:
