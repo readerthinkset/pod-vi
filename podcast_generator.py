@@ -326,6 +326,17 @@ def sanitize_latin(text):
     text = text.replace('\u3001', ', ').replace('\u3002', '.').replace('\u30fb', ' ')
     text = text.replace('\uff0c', ',').replace('\uff0e', '.').replace('\uff01', '!')
     text = text.replace('\uff1f', '?').replace('\uff20', '@')
+    _EXTRA_LATIN = {
+        '\u00e6': 'ae', '\u00c6': 'AE',
+        '\u00f8': 'o', '\u00d8': 'O',
+        '\u0153': 'oe', '\u0152': 'OE',
+        '\u00df': 'ss', '\u1e9e': 'SS',
+        '\u0142': 'l', '\u0141': 'L',
+        '\u0131': 'i',
+        '\u0111': 'd', '\u0110': 'D',
+        '\u00f0': 'd', '\u00d0': 'D',
+        '\u00fe': 'th', '\u00de': 'TH',
+    }
     def norm_letter(m):
         ch = m.group(0)
         if ch == '\u0101': return 'a'
@@ -346,8 +357,16 @@ def sanitize_latin(text):
         if ch == '\u00fc': return 'u'
         if ch == '\u00f6': return 'o'
         if ch == '\u00e4': return 'a'
+        if ch in _EXTRA_LATIN:
+            return _EXTRA_LATIN[ch]
+        import unicodedata as _ud
+        _base = ''.join(
+            c for c in _ud.normalize('NFKD', ch)
+            if not _ud.combining(c))
+        if _base and all(ord(c) < 128 for c in _base):
+            return _base
         return ch
-    text = re.sub(r'[\u00c0-\u024f\u0100-\u017f]', norm_letter, text)
+    text = re.sub(r'[\u00c0-\u024f\u0100-\u017f\u1e00-\u1eff]', norm_letter, text)
     text = re.sub(r'[\u3040-\u30ff\u4e00-\u9fff\uff00-\uffef\u3000-\u303f]', ' ', text)
     # final safety net: map remaining symbols to ASCII, else drop (prevents any tofu glyph)
     text = text.replace('\u2192', ' -> ').replace('\u2190', ' <- ').replace('\u2194', ' -- ')
@@ -426,6 +445,16 @@ def draw_headphones_icon(draw, center_x, center_y):
     draw.rounded_rectangle([center_x + 10, center_y - 3, center_x + 16, center_y + 11], radius=2, fill=YELLOW)
 
 _SCRIPT_RANGES = []
+_CJK_TRACKING_RATIO = 0.06
+
+
+def _cjk_tracking(font):
+    """Extra breathing room after each CJK glyph, scaled with font size."""
+    try:
+        size = font.size
+    except Exception:
+        size = 40
+    return max(2, int(round(size * _CJK_TRACKING_RATIO)))
 
 
 def _script_tokens(text, font, draw):
@@ -698,7 +727,7 @@ def create_frame(turn, output_path, frame_num=0, preserve_highlights=False):
     ro_lines = _wrap_ro(romaji_text, ro_font, 1350) if romaji_text else []
     n_ro = len(ro_lines)
 
-    JA_RO_GAP = 58
+    JA_RO_GAP = 72
     SAFE_BOTTOM = ZONE_BOTTOM - 6
 
     def _measure_block():
@@ -837,24 +866,50 @@ def parse_turns_json(content, target_key="target"):
 
     return recovered
 
-def _fetch_turns_batch(topic, topic_tr, topic_en, start_turn, batch_size=10):
+def _format_history_block(history, max_turns=6):
+    """Compact recent turns for the batch prompt (speaker + English + target text)."""
+    lines = []
+    for turn in (history or [])[-max_turns:]:
+        if not isinstance(turn, dict):
+            continue
+        speaker = turn.get("speaker", "?")
+        role = "Linh" if speaker == "Host2" else "Minh"
+        en = clean_text(turn.get("english", ""))
+        tx = clean_text(re.sub(r'\*\*(.*?)\*\*', r'\1', turn.get("target", "")))
+        lines.append(f"{role} ({speaker}): EN: {en} / TX: {tx}")
+    return "\n".join(lines)
+
+
+def _fetch_turns_batch(topic, topic_tr, topic_en, start_turn, batch_size=10, history=None):
     """Fetch one small batch of turns with multi-model fallback and robust parsing."""
     current_host = "Host2" if start_turn % 2 == 0 else "Host1"
     next_host = "Host1" if current_host == "Host2" else "Host2"
     host_role = "Linh" if current_host == "Host2" else "Minh"
 
+    history_block = _format_history_block(history)
     intro_instruction = ""
     if start_turn == 0:
         intro_instruction = ("IMPORTANT: This is the FIRST batch. Keep the introduction SHORT - just 2 lines total "
                              "(one from Linh/Host2, one from Minh/Host1), then immediately dive into the topic. "
                              "No long welcome speeches.\n")
-    elif start_turn < 4:
+    elif history_block:
+        intro_instruction = ("IMPORTANT: This is a CONTINUATION. The conversation below is already in progress. "
+                             "The first new turn MUST directly respond to the last line above: answer its question, "
+                             "react with an opinion or feeling, then ask a follow-up question. "
+                             "Do NOT greet, introduce yourself, welcome anyone, or restate the topic. "
+                             "Keep ONE evolving thread: every turn answers or reacts to the previous turn, "
+                             "never two disconnected monologues.\n")
+    else:
         intro_instruction = "Continue naturally into the topic conversation. No new introductions.\n"
+
+    history_section = ""
+    if history_block:
+        history_section = (f"Previous conversation (respond directly to the LAST line):\n{history_block}\n\n")
 
     prompt = f"""You are writing a Vietnamese/English learning podcast at A2 level with translit.
 Topic: {topic}
 
-The dialogue so far is at turn {start_turn}. The current speaker is {host_role} ({current_host}).
+{history_section}The dialogue so far is at turn {start_turn}. The current speaker is {host_role} ({current_host}).
 Write the NEXT {batch_size} turns. Speakers STRICTLY alternate starting with {current_host}.
 
 {intro_instruction}Each turn: 3-4 SHORT sentences (6-10 words each) with PERIODS for natural TTS pauses. 20-30 seconds spoken.
@@ -1011,7 +1066,7 @@ def generate_script():
     _deadline = _time.time() + 600  # generous 10 min cap
 
     while len(all_turns) < TARGET and consecutive_empty < 12 and _time.time() < _deadline:
-        batch = _fetch_turns_batch(topic, topic_tr, topic_en, len(all_turns), BATCH)
+        batch = _fetch_turns_batch(topic, topic_tr, topic_en, len(all_turns), BATCH, history=all_turns)
         if not batch:
             consecutive_empty += 1
             wait_s = min(15, 3 + consecutive_empty * 2)
@@ -1128,26 +1183,124 @@ def _karaoke_marked(tokens, k):
 
     The highlighted token keeps its exact position, so the wrapped subtitle
     lines are identical at every step: only the color changes, the layout
-    never shifts. Pure-space tokens are never wrapped in markers.
+    never shifts. A pure-space step keeps the nearest real word highlighted
+    (looking backward first), so no step is ever marker-free.
     """
+    kk = k
+    if 0 <= kk < len(tokens) and tokens[kk].strip() == "":
+        j = kk
+        while j >= 0 and tokens[j].strip() == "":
+            j -= 1
+        if j < 0:
+            j = kk
+            while j < len(tokens) and tokens[j].strip() == "":
+                j += 1
+        if j < len(tokens):
+            kk = j
     return _KARAOKE_SEP.join(
-        f"**{x}**" if (j == k and x.strip() != "") else x
+        f"**{x}**" if (j == kk and x.strip() != "") else x
         for j, x in enumerate(tokens))
 
 
-def karaoke_tokens_for_text(target_text):
-    """Split a line into per-word highlight tokens."""
+def _boundary_tokens_and_spans(clean, boundaries):
+    """Align Edge TTS word boundaries to the text: (token texts, spans).
+
+    Returns (None, None) when alignment fails. Skipped characters between
+    boundaries (punctuation or spaces the engine does not emit) attach to
+    the preceding token, so joining the tokens rebuilds the text exactly.
+    """
+    items = [(b.get("text", ""), b) for b in (boundaries or []) if b.get("text")]
+    if not items or not clean:
+        return None, None
+    out, spans, pos = [], [], 0
+    for t, b in items:
+        raw = t
+        i = clean.find(raw, pos)
+        if i < 0:
+            return None, None
+        if i > pos:
+            gap = clean[pos:i]
+            if out:
+                out[-1] += gap
+            else:
+                t = gap + raw
+        try:
+            start = float(b.get("offset", 0))
+            end = start + float(b.get("duration", 0))
+        except (TypeError, ValueError):
+            return None, None
+        out.append(t)
+        spans.append([start, end])
+        pos = i + len(raw)
+    if pos < len(clean):
+        if not out:
+            return None, None
+        out[-1] += clean[pos:]
+    return out, spans
+
+
+def _spans_for_tokens(tokens, aligned, spans):
+    """Map display tokens back onto aligned boundary spans.
+
+    Matching tolerates whitespace attached to boundary pieces (spaces the
+    engine skips attach to the neighboring piece); returns None on any
+    surprise (caller falls back to even split).
+    """
+    res, j = [], 0
+    for tok in tokens:
+        rest, s, e = tok, None, None
+        while rest:
+            if j >= len(aligned):
+                return None
+            p, (ps, pe) = aligned[j], spans[j]
+            pm = p.strip()
+            if not pm:
+                j += 1
+                continue
+            if rest == pm or rest.startswith(pm):
+                s = ps if s is None else s
+                e = pe
+                rest = rest[len(pm):]
+                j += 1
+            else:
+                return None
+        res.append([s, e])
+    return res
+
+
+def karaoke_tokens_for_text(target_text, boundaries=None):
+    """Split a line into per-word highlight tokens.
+
+    Edge TTS word boundaries are preferred when they rebuild the text
+    (the engine's own spoken words); otherwise plain word split.
+    """
     clean = re.sub('\\*\\*(.*?)\\*\\*', '\\1', target_text or "").strip()
     if not clean:
         return []
+    if boundaries:
+        aligned, _spans = _boundary_tokens_and_spans(clean, boundaries)
+        if aligned is not None and "".join(aligned) == clean:
+            return [a.strip() for a in aligned if a.strip()]
     return clean.split()
 
 
-def karaoke_step_durations(tokens, duration, boundaries):
-    """Per-token seconds: real Edge timings when counts match, else even split."""
+def karaoke_step_durations(tokens, duration, boundaries, target_text=None):
+    """Per-token seconds: exact Edge spans when they map to tokens, else split."""
     n = len(tokens)
     if n == 0:
         return []
+    if boundaries and target_text:
+        clean = re.sub(r'\*\*(.*?)\*\*', r'\1', target_text or "").strip()
+        aligned, spans = _boundary_tokens_and_spans(clean, boundaries)
+        if (aligned is not None and "".join(aligned) == clean
+                and "".join(tokens).replace(" ", "") == clean.replace(" ", "")):
+            mapped = _spans_for_tokens(tokens, aligned, spans)
+            if mapped is not None:
+                total = sum(e - s for s, e in mapped) or duration
+                durs = [(e - s) * duration / total for s, e in mapped]
+                durs = [max(0.12, d) for d in durs]
+                scale = duration / sum(durs)
+                return [d * scale for d in durs]
     if boundaries and len(boundaries) == n:
         total = sum(b["duration"] for b in boundaries) or duration
         durs = [b["duration"] * duration / total for b in boundaries]
@@ -1173,8 +1326,9 @@ def write_karaoke_files(turns, audio_files, out_dir):
     timings = []
     for turn, audio in zip(turns, audio_files):
         dur = audio["duration"]
-        tokens = karaoke_tokens_for_text(turn.get("target", ""))
-        steps = karaoke_step_durations(tokens, dur, audio.get("word_boundaries", []))
+        bounds = audio.get("word_boundaries", [])
+        tokens = karaoke_tokens_for_text(turn.get("target", ""), bounds)
+        steps = karaoke_step_durations(tokens, dur, bounds, turn.get("target", ""))
         cursor = t
         cells = []
         for tok, d in zip(tokens, steps):
@@ -1209,10 +1363,11 @@ def render_karaoke_preview(turns, audio_files, out_dir, max_turns=3):
     for ti in range(min(max_turns, len(turns))):
         turn = turns[ti]
         audio = audio_files[ti]
-        tokens = karaoke_tokens_for_text(turn.get("target", ""))
+        bounds = audio.get("word_boundaries", [])
+        tokens = karaoke_tokens_for_text(turn.get("target", ""), bounds)
         if not tokens:
             continue
-        steps = karaoke_step_durations(tokens, audio["duration"], audio.get("word_boundaries", []))
+        steps = karaoke_step_durations(tokens, audio["duration"], bounds, turn.get("target", ""))
         parts = []
         for k in range(len(tokens)):
             marked = _karaoke_marked(tokens, k)
@@ -1249,8 +1404,9 @@ def render_karaoke_preview(turns, audio_files, out_dir, max_turns=3):
 def _render_turn_segment(turn, audio, video_dir, i):
     """One video segment per turn with burnt-in per-word karaoke highlight."""
     video_dir = Path(video_dir)
-    tokens = karaoke_tokens_for_text(turn.get("target", ""))
-    steps = karaoke_step_durations(tokens, audio["duration"], audio.get("word_boundaries", []))
+    bounds = audio.get("word_boundaries", [])
+    tokens = karaoke_tokens_for_text(turn.get("target", ""), bounds)
+    steps = karaoke_step_durations(tokens, audio["duration"], bounds, turn.get("target", ""))
     if not tokens:
         img = video_dir / f"f_{i:04d}.png"
         create_frame(turn, str(img), i)

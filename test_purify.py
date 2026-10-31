@@ -123,6 +123,38 @@ if _mtoks:
     if any(_w != _wraps[0] for _w in _wraps):
         FAILURES.append("wrap-stable: lines shift between steps: %r" % (_wraps,))
 
+# 13. Continuation history carries recent turns and strips markers.
+_hb13 = [{"speaker": "Host2" if i % 2 == 0 else "Host1", "target": "**w%d** text" % i, "english": "line%d" % i} for i in range(8)]
+_h13 = pg._format_history_block(_hb13)
+if "**" in _h13 or "line7" not in _h13 or "line0" in _h13 or "line1" in _h13:
+    FAILURES.append("history-window: %r" % (_h13,))
+
+# 14. Engine boundaries give exact per-token timings summing to the duration.
+_sw14 = (trg or clean).replace("**", "").split()
+_off14 = 0.0
+_b14 = []
+for _w in _sw14:
+    _b14.append({"text": _w, "offset": _off14, "duration": 0.3})
+    _off14 += 0.4
+_t14 = pg.karaoke_tokens_for_text(trg or clean, _b14)
+_d14 = pg.karaoke_step_durations(_t14, _off14, _b14, trg or clean)
+if not _t14 or len(_d14) != len(_t14) or abs(sum(_d14) - _off14) > 0.05:
+    FAILURES.append("engine-sync: %r stepped %r" % (_t14, _d14))
+
+# 15. Exactly one non-space word highlighted per karaoke step; spacing kept.
+if _mtoks:
+    for _k in range(len(_mtoks)):
+        _m = pg._karaoke_marked(_mtoks, _k)
+        if _m.count("**") != 2:
+            FAILURES.append("mark-one: step %d markers %r" % (_k, _m))
+            break
+        if _m.split("**")[1].strip() == "":
+            FAILURES.append("mark-space: step %d highlights blank %r" % (_k, _m))
+            break
+        if _m.replace("**", "") != _mplain:
+            FAILURES.append("mark-spacing: step %d moved text %r" % (_k, _m))
+            break
+
 if FAILURES:
     print("FAIL %d" % len(FAILURES))
     for f in FAILURES:
